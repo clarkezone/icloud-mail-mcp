@@ -1,0 +1,38 @@
+[package]
+name = "icloud-mail-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+description = "Read-only iCloud Mail access through a private MCP service"
+repository = "https://github.com/clarkezone/icloud-mail-mcp"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+imap-proto = "0.17"
+encoding_rs = "0.8"
+mail-parser = "1.0.1"
+ring = "0.17"
+rmcp = { version = "=3.8.0", features = ["schemars", "transport-streamable-http-server"] }
+rpassword = "7"
+rustix = { version = "1", features = ["process", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "signal", "time", "sync"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+uuid = { version = "1", features = ["v4"] }
+webpki-roots = "1"
+zeroize = { version = "1", features = ["serde"] }
+
+[dev-dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rmcp = { version = "=3.8.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }

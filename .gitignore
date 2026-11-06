@@ -1,0 +1,16 @@
+/target/
+.env
+.env.*
+!.env.example
+/credentials/
+/secrets/
+/local/
+*.pem
+*.key
+*.p12
+*.pfx
+*.eml
+*.mbox
+*.log
+*.sqlite*
+*.db
