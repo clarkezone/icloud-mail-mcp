@@ -19,6 +19,12 @@ pub enum ErrorCode {
     DeadlineExceeded,
     Cancelled,
     InternalError,
+    SendingDisabled,
+    IdempotencyConflict,
+    SubmissionNotFound,
+    JournalUnavailable,
+    JournalFull,
+    InvalidMessage,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MailError(pub ErrorCode);

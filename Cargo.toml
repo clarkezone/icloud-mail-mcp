@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
 publish = false
-description = "Read-only iCloud Mail access through a private MCP service"
+description = "iCloud Mail access and optional SMTP submission through a private MCP service"
 repository = "https://github.com/clarkezone/icloud-mail-mcp"
 readme = "README.md"
 
@@ -32,6 +32,9 @@ tracing-subscriber = { version = "0.3", features = ["fmt"] }
 uuid = { version = "1", features = ["v4"] }
 webpki-roots = "1"
 zeroize = { version = "1", features = ["serde"] }
+
+lettre = { version = "=0.11.23", default-features = false, features = ["builder"] }
+rusqlite = { version = "=0.41.1", features = ["bundled"] }
 
 [dev-dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }

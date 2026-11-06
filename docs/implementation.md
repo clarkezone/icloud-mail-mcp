@@ -8,6 +8,8 @@
 - mail: EXAMINE/UID operations, modified UTF-7 folders, bounded headers, MIME selection, bounded transfer/charset/HTML decoding.
 - state: authenticated handles/cursors and bounded expiring snapshots accounting for String/Vec capacity.
 - credentials: hidden local setup, ownership/mode checks, no-follow opening, atomic replacement and zeroized secrets. Paths inside Git checkouts are refused.
+- sending: optional dedicated worker thread, private fixed sender, SQLite idempotency/outcome journal and typed status lookup.
+- smtp: bounded fixed-endpoint STARTTLS transport, authenticated submission and phase-aware uncertain outcomes; test-only fixture connectors.
 - logging: immutable metadata-target allowlist; environment settings cannot enable dependency payloads.
 
 The candidate async-imap wrapper was not used: framing limits and READ-ONLY selection verification must be controlled before general parsing. This client uses imap-proto after its framing guard. General protocol nesting is bounded before parsing; MIME semantic depth/parts are validated before body selection. TLS validates the fixed iCloud hostname against trusted roots.
@@ -36,4 +38,8 @@ Strict mode requires a tagged READ-ONLY result and remains the default. The loca
 - Request IDs longer than 256 characters are refused so reflected identifiers cannot bypass the response budget.
 - Display headers are clipped with truncated_fields when necessary; metadata_truncated reflects clipping.
 
-Building/testing performs no installation, deployment, network-policy mutation, mailbox mutation, or sending.
+Building/testing performs no service installation, deployment, network-policy change, live mailbox mutation or live email delivery.
+
+## Optional outbound phase
+
+See [sending.md](sending.md) for the normative send/status contract, private setup, state retention, transport/worker limits and release evidence. The default remains read-only. Synthetic SMTP and HTTP tests do not establish live delivery or Sent-folder behavior. No live message is sent as part of implementation checks.
