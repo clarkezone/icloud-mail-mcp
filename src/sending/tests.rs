@@ -14,6 +14,8 @@ enum Mode {
     DropAfterData,
     HoldAfterData,
     RejectAuth,
+    TemporaryAuth,
+    NoAuthPlain,
     NoStarttls,
     BadTls,
     OversizedGreeting,
@@ -87,6 +89,8 @@ impl Fixture {
                         let reply = if command.starts_with("EHLO ") {
                             if matches!(mode, Mode::BadTls) {
                                 "250-fixture\r\n250-STARTTLS\r\n250 AUTH PLAIN\r\n"
+                            } else if matches!(mode, Mode::NoAuthPlain) {
+                                "250-fixture\r\n250 AUTH LOGIN\r\n"
                             } else {
                                 "250-fixture\r\n250 AUTH PLAIN\r\n"
                             }
@@ -97,6 +101,8 @@ impl Fixture {
                         } else if command.starts_with("AUTH PLAIN ") {
                             if matches!(mode, Mode::RejectAuth) {
                                 "535 provider-secret-canary\r\n"
+                            } else if matches!(mode, Mode::TemporaryAuth) {
+                                "454 temporary-secret-canary\r\n"
                             } else {
                                 "235 authenticated\r\n"
                             }
@@ -403,6 +409,32 @@ async fn auth_rejection_breaker_and_reply_limits_fail_without_sending() {
     }
 }
 #[tokio::test]
+async fn temporary_auth_failures_do_not_open_the_breaker() {
+    for (mode, reason, code, auths) in [
+        (Mode::TemporaryAuth, SendReason::SmtpRejected, Some(454), 2),
+        (Mode::NoAuthPlain, SendReason::ProtocolError, None, 0),
+    ] {
+        let f = Fixture::new(mode).await;
+        let tmp = tempfile::tempdir().unwrap();
+        let stop = CancellationToken::new();
+        let s = f
+            .service(&tmp.path().join("private/send.sqlite3"), stop.clone())
+            .await;
+        let first = send(&s, request()).await.unwrap();
+        assert_eq!(first.outcome, SendOutcome::NotAccepted);
+        assert_eq!((first.reason, first.smtp_code), (Some(reason), code));
+        // A deliberate new key still reaches SMTP: the breaker stayed closed.
+        let mut retry = request();
+        retry.idempotency_key = uuid::Uuid::new_v4().to_string();
+        let second = send(&s, retry).await.unwrap();
+        assert_eq!(second.reason, Some(reason));
+        assert_eq!(f.trace.lock().unwrap().auth, auths);
+        assert!(f.trace.lock().unwrap().messages.is_empty());
+        stop.cancel();
+        s.tx.closed().await;
+    }
+}
+#[tokio::test]
 async fn missing_starttls_and_failed_tls_never_transmit_authentication() {
     for mode in [Mode::NoStarttls, Mode::BadTls] {
         let f = Fixture::new(mode).await;
@@ -646,6 +678,30 @@ async fn real_http_exposes_send_tools_only_when_configured_and_replays_one_submi
                 .await
                 .unwrap();
             assert_eq!(status.structured_content.unwrap()["outcome"], "accepted");
+            // Well-typed but invalid content returns the fixed invalid_message envelope.
+            let mut bad = r.clone();
+            bad.idempotency_key = "not-a-uuid".into();
+            bad.to = vec!["synthetic recipient@example.invalid".into()];
+            for (tool, args) in [
+                ("send_message", serde_json::to_value(&bad).unwrap()),
+                (
+                    "get_send_status",
+                    serde_json::json!({"idempotency_key":"not-a-uuid"}),
+                ),
+            ] {
+                let invalid = client
+                    .call_tool(
+                        CallToolRequestParams::new(tool)
+                            .with_arguments(args.as_object().unwrap().clone()),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(invalid.is_error, Some(true));
+                assert_eq!(
+                    invalid.structured_content.unwrap()["error"]["code"],
+                    "invalid_message"
+                );
+            }
             assert_eq!(f.trace.lock().unwrap().messages.len(), 1);
         } else {
             assert_eq!(result.is_error, Some(true));

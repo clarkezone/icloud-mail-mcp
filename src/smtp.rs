@@ -220,6 +220,23 @@ async fn connect(connector: &Connector) -> Result<Wire> {
     }
     Ok(wire)
 }
+/// RFC 5321 transparency: double a leading dot on every line, then terminate DATA.
+fn dot_stuff(bytes: &[u8]) -> Vec<u8> {
+    let mut data = Vec::with_capacity(bytes.len() + 1024);
+    let mut line_start = true;
+    for &b in bytes {
+        if line_start && b == b'.' {
+            data.push(b'.');
+        }
+        data.push(b);
+        line_start = b == b'\n';
+    }
+    if !data.ends_with(b"\r\n") {
+        data.extend_from_slice(b"\r\n");
+    }
+    data.extend_from_slice(b".\r\n");
+    data
+}
 pub(crate) async fn submit(
     connector: &Connector,
     credentials: &Credentials,
@@ -237,7 +254,8 @@ pub(crate) async fn submit(
             250,
         )?;
         if !auth_plain(&hello) {
-            return Err(failure(SendReason::AuthenticationFailed));
+            // A missing mechanism is not a credential rejection; it must not open the breaker.
+            return Err(failure(SendReason::ProtocolError));
         }
         let mut plain = Zeroizing::new(Vec::new());
         plain.push(0);
@@ -251,8 +269,12 @@ pub(crate) async fn submit(
             let continuation = Zeroizing::new(format!("{}\r\n", *encoded));
             auth = wire.command(continuation.as_bytes()).await?;
         }
+        // Only a permanent (5xx) AUTH reply is a credential rejection. Temporary 4xx
+        // replies stay ordinary not-accepted results so they cannot disable sending.
         expect(auth, 235).map_err(|mut e| {
-            e.reason = SendReason::AuthenticationFailed;
+            if e.code.is_some_and(|code| (500..600).contains(&code)) {
+                e.reason = SendReason::AuthenticationFailed;
+            }
             e
         })?;
         expect(
@@ -275,20 +297,7 @@ pub(crate) async fn submit(
             recipients.push(recipient);
         }
         expect(wire.command(b"DATA\r\n").await?, 354)?;
-        let bytes = message.formatted();
-        let mut data = Vec::with_capacity(bytes.len() + 1024);
-        let mut line_start = true;
-        for b in bytes {
-            if line_start && b == b'.' {
-                data.push(b'.');
-            }
-            data.push(b);
-            line_start = b == b'\n';
-        }
-        if !data.ends_with(b"\r\n") {
-            data.extend_from_slice(b"\r\n");
-        }
-        data.extend_from_slice(b".\r\n");
+        let data = dot_stuff(&message.formatted());
         body_started = true;
         wire.write(&data).await?;
         expect(wire.reply().await?, 250)?;
@@ -313,5 +322,16 @@ pub(crate) async fn submit(
             reason: Some(error.reason),
             code: error.code,
         },
+    }
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn dot_stuffing_escapes_leading_dots_and_terminates() {
+        assert_eq!(
+            super::dot_stuff(b".a\r\nb\r\n.\r\n..c"),
+            b"..a\r\nb\r\n..\r\n...c\r\n.\r\n".to_vec()
+        );
+        assert_eq!(super::dot_stuff(b"x\r\n"), b"x\r\n.\r\n".to_vec());
     }
 }

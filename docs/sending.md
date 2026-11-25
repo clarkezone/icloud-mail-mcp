@@ -39,7 +39,7 @@ idempotency_key, message_id, outcome, reason, smtp_code, updated_at
 
 `accepted` means the SMTP server returned its final positive DATA acceptance. It does not prove recipient delivery or that a Sent-folder copy exists. The service does not append its own Sent copy, which avoids an unverified duplicate. Provider Sent-folder behavior and eventual delivery require separately authorized live acceptance tests.
 
-For `send_message`, non-accepted outcomes set MCP `isError=true` while retaining the structured status. For `get_send_status`, an existing status is a successful query even when the stored outcome is negative/unknown. Missing keys, conflicts, unavailable/full journals, disabled sending and invalid messages use fixed error envelopes. Added error codes are `sending_disabled`, `idempotency_conflict`, `submission_not_found`, `journal_unavailable`, `journal_full`, `invalid_message`. Send annotations advertise readOnlyHint=false, destructiveHint=true, idempotentHint=false and openWorldHint=true. Status lookup is read-only/idempotent.
+For `send_message`, non-accepted outcomes set MCP `isError=true` while retaining the structured status. For `get_send_status`, an existing status is a successful query even when the stored outcome is negative/unknown. Missing keys, conflicts, unavailable/full journals, disabled sending and invalid messages use fixed error envelopes; schema-invalid arguments (wrong types, unknown fields) remain MCP invalid-params errors, while well-typed content failing validation returns invalid_message. Added error codes are `sending_disabled`, `idempotency_conflict`, `submission_not_found`, `journal_unavailable`, `journal_full`, `invalid_message`. Send annotations advertise readOnlyHint=false, destructiveHint=true, idempotentHint=false and openWorldHint=true. Status lookup is read-only/idempotent.
 
 ## Duplicate prevention and uncertain outcomes
 
@@ -61,7 +61,7 @@ A separate serialized send worker runs on one dedicated thread so SQLite/fsync c
 
 Queued canceled/expired/disconnected jobs issue no SMTP command. After a claim but before an attempt, cancellation records not accepted. Once an attempt begins, caller cancellation cannot undo submission: drive the attempt to its bounded outcome and record it, even if the caller disconnects. The attempt is bounded by the original admission deadline and at most 20 seconds. Global shutdown interrupts the connection, classifies the phase conservatively and preserves the preclaimed unknown record if the process exits before final persistence. The normal HTTP admission deadline remains 30 seconds.
 
-A rejected SMTP authentication opens the send worker's process-wide breaker until deliberate restart. It does not prevent status lookup or replay of recorded results. It is separate from the read worker's authentication breaker. Health never authenticates.
+A permanent (5xx) SMTP authentication rejection opens the send worker's process-wide breaker until deliberate restart. Temporary 4xx AUTH replies and a missing AUTH PLAIN mechanism are ordinary not-accepted results and leave the breaker closed. It does not prevent status lookup or replay of recorded results. It is separate from the read worker's authentication breaker. Health never authenticates.
 
 ## Verification and live acceptance
 

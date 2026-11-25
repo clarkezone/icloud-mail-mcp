@@ -344,7 +344,11 @@ impl Journal {
         if count >= RECORD_LIMIT {
             return Err(MailError(E::JournalFull));
         }
-        self.db.execute("INSERT INTO submissions (key,account,fingerprint,message_id,outcome,reason,code,updated_at) VALUES (?1,?2,?3,?4,?5,?6,NULL,?7)", params![result.idempotency_key,self.account,fingerprint,result.message_id,enum_string(result.outcome),result.reason.map(enum_string),result.updated_at]).map_err(db_error)?;
+        self.db.execute("INSERT INTO submissions (key,account,fingerprint,message_id,outcome,reason,code,updated_at) VALUES (?1,?2,?3,?4,?5,?6,NULL,?7)", params![result.idempotency_key,self.account,fingerprint,result.message_id,enum_string(result.outcome),result.reason.map(enum_string),result.updated_at]).map_err(|e| match e.sqlite_error_code() {
+            // The 16 MiB max_page_count cap surfaces as SQLITE_FULL.
+            Some(rusqlite::ErrorCode::DiskFull) => MailError(E::JournalFull),
+            _ => db_error(e),
+        })?;
         Ok(())
     }
     fn finish(&self, result: &SendStatus) -> Result<()> {

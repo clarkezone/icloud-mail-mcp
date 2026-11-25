@@ -196,24 +196,13 @@ impl ServerHandler for Handler {
         if request.name == "send_message" || request.name == "get_send_status" {
             let outcome = if request.name == "send_message" {
                 let params: SendMessage = parse(args)?;
-                if !params.valid() {
-                    return Err(rmcp::ErrorData::invalid_params(
-                        "invalid send arguments",
-                        None,
-                    ));
-                }
+                // Well-typed but invalid content uses the contract's invalid_message envelope.
                 match &self.sending {
                     Some(service) => service.send(params, deadline, context.ct.clone()).await,
                     None => Err(MailError(E::SendingDisabled)),
                 }
             } else {
                 let params: GetSendStatus = parse(args)?;
-                if !crate::sending::valid_key(&params.idempotency_key) {
-                    return Err(rmcp::ErrorData::invalid_params(
-                        "invalid send arguments",
-                        None,
-                    ));
-                }
                 match &self.sending {
                     Some(service) => {
                         service
