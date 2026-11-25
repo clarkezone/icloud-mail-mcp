@@ -140,7 +140,13 @@
                     "busy",
                     "deadline_exceeded",
                     "cancelled",
-                    "internal_error"
+                    "internal_error",
+                    "sending_disabled",
+                    "idempotency_conflict",
+                    "submission_not_found",
+                    "journal_unavailable",
+                    "journal_full",
+                    "invalid_message"
                   ],
                   "type": "string"
                 },
@@ -363,7 +369,13 @@
                     "busy",
                     "deadline_exceeded",
                     "cancelled",
-                    "internal_error"
+                    "internal_error",
+                    "sending_disabled",
+                    "idempotency_conflict",
+                    "submission_not_found",
+                    "journal_unavailable",
+                    "journal_full",
+                    "invalid_message"
                   ],
                   "type": "string"
                 },
@@ -655,7 +667,13 @@
                     "busy",
                     "deadline_exceeded",
                     "cancelled",
-                    "internal_error"
+                    "internal_error",
+                    "sending_disabled",
+                    "idempotency_conflict",
+                    "submission_not_found",
+                    "journal_unavailable",
+                    "journal_full",
+                    "invalid_message"
                   ],
                   "type": "string"
                 },
@@ -921,7 +939,13 @@
                     "busy",
                     "deadline_exceeded",
                     "cancelled",
-                    "internal_error"
+                    "internal_error",
+                    "sending_disabled",
+                    "idempotency_conflict",
+                    "submission_not_found",
+                    "journal_unavailable",
+                    "journal_full",
+                    "invalid_message"
                   ],
                   "type": "string"
                 },

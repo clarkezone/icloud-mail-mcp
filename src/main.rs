@@ -2,14 +2,15 @@ use clap::{Parser, Subcommand};
 use icloud_mail_mcp::{
     credentials::Credentials,
     logging,
-    server::{ServerOptions, application},
+    sending::{SendSettings, SubmissionService},
+    server::{ServerOptions, application_with_sending},
     worker::Mailbox,
 };
 use std::{net::IpAddr, path::PathBuf};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
-#[command(version, about = "Read-only iCloud Mail MCP bridge")]
+#[command(version, about = "iCloud Mail MCP bridge with optional sending")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -26,7 +27,12 @@ enum Command {
         #[arg(long)]
         credentials: PathBuf,
     },
-    /// Start the read-only MCP service; health checks do not authenticate to iCloud.
+    /// Store the fixed From/SMTP identity privately using hidden input.
+    ConfigureSending {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Start the MCP service; health checks do not authenticate to iCloud.
     Serve {
         #[arg(long, env = "ICLOUD_MAIL_CREDENTIALS")]
         credentials: PathBuf,
@@ -41,9 +47,15 @@ enum Command {
         /// Tolerate iCloud's tagged READ-WRITE EXAMINE reply; writes stay blocked.
         #[arg(long)]
         allow_icloud_examine_read_write: bool,
+        /// Opt in to SMTP tools using a private sender configuration file.
+        #[arg(long)]
+        sending_config: Option<PathBuf>,
     },
     /// Print the exact MCP tool schemas without touching an account.
-    Schemas,
+    Schemas {
+        #[arg(long)]
+        with_sending: bool,
+    },
 }
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -71,15 +83,36 @@ async fn main() -> anyhow::Result<()> {
             outcome?;
             println!("TLS, authentication, and read-only folder discovery succeeded.");
         }
-        Command::Schemas => println!(
+        Command::Schemas { with_sending } => println!(
             "{}",
-            serde_json::to_string_pretty(&icloud_mail_mcp::server::tools())?
+            serde_json::to_string_pretty(&if with_sending {
+                icloud_mail_mcp::server::tools_with_sending()
+            } else {
+                icloud_mail_mcp::server::tools()
+            })?
         ),
         Command::Configure { credentials } => {
             let username = rpassword::prompt_password("iCloud login (hidden): ")?;
             let password = rpassword::prompt_password("App-specific password (hidden): ")?;
             Credentials::new(username, password)?.save(&credentials)?;
             println!("Credentials saved in private local storage.");
+        }
+        Command::ConfigureSending { config } => {
+            let sender = rpassword::prompt_password("From address (hidden): ")?;
+            let username =
+                rpassword::prompt_password("SMTP login (hidden; Enter to use From address): ")?;
+            let username = if username.is_empty() {
+                sender.clone()
+            } else {
+                username
+            };
+            let settings = SendSettings::new(sender, username)?;
+            SubmissionService::initialize_journal(
+                &settings,
+                &config.with_file_name("send-journal.sqlite3"),
+            )?;
+            settings.save(&config)?;
+            println!("Private sending configuration saved. No email was sent.");
         }
         Command::Serve {
             credentials,
@@ -88,17 +121,33 @@ async fn main() -> anyhow::Result<()> {
             allowed_host,
             allowed_origin,
             allow_icloud_examine_read_write,
+            sending_config,
         } => {
             let credentials = Credentials::load(&credentials)?;
             let shutdown = CancellationToken::new();
+            let sending = if let Some(path) = sending_config {
+                let settings = SendSettings::load(&path)?;
+                Some(
+                    SubmissionService::start(
+                        credentials.clone(),
+                        settings,
+                        path.with_file_name("send-journal.sqlite3"),
+                        shutdown.clone(),
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
             let mailbox = if allow_icloud_examine_read_write {
                 tracing::warn!(target: "icloud_mail_mcp::ops", "Explicit iCloud EXAMINE compatibility enabled; command allowlist and PEEK restrictions remain active");
                 Mailbox::start_with_icloud_examine_compatibility(credentials, shutdown.clone())
             } else {
                 Mailbox::start(credentials, shutdown.clone())
             };
-            let app = application(
+            let app = application_with_sending(
                 mailbox,
+                sending,
                 ServerOptions {
                     bind,
                     allowed_hosts: allowed_host,
@@ -122,7 +171,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 stop.cancel();
             });
-            tracing::info!(target:"icloud_mail_mcp::ops","read-only mail service ready");
+            tracing::info!(target:"icloud_mail_mcp::ops","mail service ready");
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown.cancelled_owned())
                 .await?;

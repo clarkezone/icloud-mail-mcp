@@ -1,8 +1,10 @@
 # iCloud Mail MCP — Specification
 
-Revision: 0.3, 2026-11-06 UTC. Read-only V1 scope confirmed.
+Revision: 0.4, 2026-11-06 UTC. Read-only defaults retained; optional SMTP submission added.
 
 This revision resolves the six findings in [the review resolution record](review-resolutions.md). These are implementation requirements, not claims that the service or deployment has passed its tests.
+
+Optional outbound behavior is defined in [sending.md](sending.md). The read-only limits and guarantees below apply to the IMAP adapter and default mode; enabling the separately configured SMTP worker adds two tools without adding IMAP mutations.
 
 ## 1. Objective and scope
 
@@ -191,7 +193,7 @@ Allow at most one reconnect retry for a transient read failure, within the origi
 
 EXAMINE is the only mailbox-selection operation. Strict mode requires its tagged READ-ONLY result and is the default; fail closed rather than falling back to SELECT. An explicit local serve flag, --allow-icloud-examine-read-write, may tolerate a tagged READ-WRITE result from the fixed certificate-validated iCloud endpoint. It does not accept missing selection markers or UID identity metadata, enable SELECT, or loosen the command/PEEK restrictions. It cannot be enabled through MCP. This opt-in relies on the adapter's non-mutating command boundary instead of server-side read-only selection and emits a static startup warning. Controlled acceptance must confirm unread preservation in this mode. Use UID references and BODY.PEEK, never changing sequence-number identities. Identity combines configured account generation, exact mailbox identity, UIDVALIDITY, and UID. Message-ID headers do not substitute for it.
 
-The private adapter exposes only required authentication/session negotiation, CAPABILITY/LIST/STATUS, EXAMINE, UID SEARCH, safe UID FETCH forms, NOOP, and LOGOUT. Session-only capability negotiation may be allowed through audited typed methods. No STORE, APPEND, MOVE, COPY, EXPUNGE, CLOSE, mailbox/subscription mutation, SMTP, or generic raw-command tool. Cleanup must not call a convenience method that expunges mail. An IMAP socket is inaccessible to MCP handlers and MIME decoders.
+The private adapter exposes only required authentication/session negotiation, CAPABILITY/LIST/STATUS, EXAMINE, UID SEARCH, safe UID FETCH forms, NOOP, and LOGOUT. Session-only capability negotiation may be allowed through audited typed methods. No STORE, APPEND, MOVE, COPY, EXPUNGE, CLOSE, mailbox/subscription mutation, SMTP through the IMAP adapter, or generic raw-command tool. Cleanup must not call a convenience method that expunges mail. An IMAP socket is inaccessible to MCP handlers and MIME decoders.
 
 The guarantee is that this service does not change mail or its user-controlled flags. Other clients/provider behavior can change a mailbox concurrently. Local cached-body reads still require current account/UIDVALIDITY/existence validation before returning data.
 
@@ -205,7 +207,7 @@ At the inspected rmcp 3.8 version, service debug events include complete request
 
 ## 14. Health and operation
 
-/healthz reports process name/version, startup ID, and read_only=true, without account data. It is process health, not proof of current mail authentication. A separate local connectivity check can validate TLS/authentication/capabilities; routine health polling does not repeatedly log in.
+/healthz reports process name/version, startup ID, read_only (true unless SMTP is enabled), and sending_enabled, without account data. It is process health, not proof of current mail authentication. A separate local connectivity check can validate TLS/authentication/capabilities; routine health polling does not repeatedly log in.
 
 Support graceful termination and a documented supervised-service launch when deployment is implemented. Test locally before replacing the echo listener. Do not provision production credentials, change tailnet policy, replace running services, or perform mailbox actions merely to bootstrap the public repository.
 
@@ -236,6 +238,6 @@ V1 is complete when all four tools work against iCloud through the assistant, al
 4. Pass automated gates, choose/validate restricted enrollment, and run controlled live acceptance.
 5. Deploy the mail service on the approved endpoint with restart support.
 
-Mail organization and SMTP remain explicit later phases. Apple provides authenticated SMTP at smtp.mail.me.com:587 with TLS/STARTTLS, full iCloud address, and the app-specific password. Sending will need sender/alias handling, reply threading, delivery ambiguity, and verified Sent-folder behavior. Organization will need native UID MOVE/capability handling, destination references, partial results, and recorded/reconciled mutation outcomes. Neither is implemented by V1.
+Optional SMTP submission is implemented as a separate worker and contract in [sending.md](sending.md): fixed local sender/account, mandatory STARTTLS, durable idempotency and explicit uncertain outcomes. Reply threading, attachments and verified Sent-folder behavior remain later work. Mail organization still requires native UID MOVE/capability handling, destination references, partial results, and recorded/reconciled mutation outcomes. No IMAP mutation is implemented.
 
 References: [IMAP4rev1](https://www.rfc-editor.org/rfc/rfc3501.html), [IMAP4rev2](https://www.rfc-editor.org/rfc/rfc9051.html), [IMAP MOVE](https://www.rfc-editor.org/rfc/rfc6851.html), [UIDPLUS](https://www.rfc-editor.org/rfc/rfc4315.html), [Tailscale tags](https://tailscale.com/docs/features/tags), [Apple settings](https://support.apple.com/en-us/102525).
