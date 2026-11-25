@@ -457,6 +457,34 @@ fn fits<T: serde::Serialize>(value: &T) -> Result<bool> {
         .len()
         <= RESPONSE_LIMIT - 8192)
 }
+/// Time a reconnect must have left after its backoff wait to be worth attempting.
+const RECONNECT_HEADROOM: Duration = Duration::from_secs(5);
+/// Worker-wide reconnect backoff. The wait runs from the last failure, not from each
+/// request's admission, so it elapses between requests and always ends.
+#[derive(Default)]
+struct Backoff {
+    failures: u32,
+    not_before: Option<Instant>,
+}
+impl Backoff {
+    fn fail(&mut self, now: Instant) {
+        let base = (1u64 << self.failures.min(5)).min(30);
+        let jitter = u64::from(uuid::Uuid::new_v4().as_bytes()[0]) * 1000 / 256;
+        self.failures = self.failures.saturating_add(1);
+        self.not_before = Some(now + Duration::from_millis((base * 1000 + jitter).min(30000)));
+    }
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+    /// Ok(instant to wait for, if any), or Err when the deadline cannot accommodate it.
+    fn admit(&self, now: Instant, deadline: Instant) -> std::result::Result<Option<Instant>, ()> {
+        match self.not_before {
+            Some(at) if at > now && at + RECONNECT_HEADROOM > deadline => Err(()),
+            Some(at) if at > now => Ok(Some(at)),
+            _ => Ok(None),
+        }
+    }
+}
 async fn run(
     mut rx: mpsc::Receiver<Job>,
     credentials: Credentials,
@@ -465,7 +493,7 @@ async fn run(
 ) {
     let mut session: Option<Wire> = None;
     let mut auth_failed = false;
-    let mut failures = 0u32;
+    let mut backoff = Backoff::default();
     let used = Arc::new(AtomicUsize::new(0));
     let mut state = SessionState {
         tokens: Tokens::new(),
@@ -485,17 +513,19 @@ async fn run(
         let started = Instant::now();
         let operation_id = uuid::Uuid::new_v4();
         let tool = job.op.name();
+        // A refused reconnect made no attempt, so it must not extend the backoff.
+        let mut refused = false;
         let work = async {
             let mut attempt = 0;
             loop {
                 if session.is_none() {
-                    if failures > 0 {
-                        let base = (1u64 << failures.saturating_sub(1).min(5)).min(30);
-                        let jitter = u64::from(uuid::Uuid::new_v4().as_bytes()[0]) * 1000 / 256;
-                        tokio::time::sleep(Duration::from_millis(
-                            (base * 1000 + jitter).min(30000),
-                        ))
-                        .await;
+                    match backoff.admit(Instant::now(), job.deadline) {
+                        Ok(Some(at)) => tokio::time::sleep_until(at).await,
+                        Ok(None) => {}
+                        Err(()) => {
+                            refused = true;
+                            return Err(MailError(E::UpstreamUnavailable));
+                        }
                     }
                     let mut wire = tokio::time::timeout(
                         Duration::from_secs(5),
@@ -517,7 +547,7 @@ async fn run(
                     .await;
                 if matches!(result, Err(MailError(E::UpstreamUnavailable))) && attempt == 0 {
                     session = None;
-                    failures = failures.saturating_add(1);
+                    backoff.fail(Instant::now());
                     attempt += 1;
                     continue;
                 }
@@ -534,14 +564,79 @@ async fn run(
             if error.0 == E::AuthenticationFailed {
                 auth_failed = true;
             }
-            if matches!(error.0, E::UpstreamUnavailable | E::DeadlineExceeded) {
-                failures = failures.saturating_add(1);
+            if !refused && matches!(error.0, E::UpstreamUnavailable | E::DeadlineExceeded) {
+                backoff.fail(Instant::now());
             }
         } else {
-            failures = 0;
+            backoff.reset();
         }
         tracing::info!(target:"icloud_mail_mcp::ops",%operation_id,tool,success=result.is_ok(),elapsed_ms=started.elapsed().as_millis() as u64,"mail request completed");
         let _ = job.reply.send(result);
     }
     // Dropping the socket never sends CLOSE/EXPUNGE. All state and credentials die here.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_is_bounded_and_always_ends() {
+        let mut backoff = Backoff::default();
+        let start = Instant::now();
+        let request = Duration::from_secs(30);
+        for base in [1, 2, 4, 8, 16, 30, 30, 30] {
+            backoff.fail(start);
+            let wait = backoff.not_before.unwrap() - start;
+            assert!(wait >= Duration::from_secs(base) && wait <= request);
+            assert!(wait <= Duration::from_secs(base + 1));
+        }
+        // At the cap a fresh request fails fast instead of sleeping out its deadline.
+        assert_eq!(backoff.admit(start, start + request), Err(()));
+        // Later requests wait only for the remainder, then proceed without waiting.
+        let later = start + Duration::from_secs(10);
+        assert!(matches!(backoff.admit(later, later + request), Ok(Some(_))));
+        let ended = start + request;
+        assert_eq!(backoff.admit(ended, ended + request), Ok(None));
+        backoff.reset();
+        assert_eq!(backoff.admit(start, start), Ok(None));
+    }
+
+    #[tokio::test]
+    async fn refused_reconnects_fail_fast_and_do_not_extend_backoff() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let connects = Arc::new(AtomicUsize::new(0));
+        let counter = connects.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+        let credentials = Credentials::new("synthetic".into(), "synthetic".into()).unwrap();
+        let shutdown = CancellationToken::new();
+        let mailbox =
+            Mailbox::with_connector(credentials, shutdown.clone(), Connector::Fixture(addr));
+        let call = || {
+            mailbox.call(
+                Operation::Folders(serde_json::from_str("{}").unwrap()),
+                Instant::now() + RECONNECT_HEADROOM,
+                CancellationToken::new(),
+            )
+        };
+        let unavailable = Err(MailError(E::UpstreamUnavailable));
+        assert_eq!(call().await, unavailable);
+        let began = Instant::now();
+        for _ in 0..20 {
+            assert_eq!(call().await, unavailable);
+        }
+        assert!(began.elapsed() < Duration::from_millis(900));
+        assert_eq!(connects.load(Ordering::SeqCst), 1);
+        // Had refusals counted as failures, the wait would now exceed this.
+        tokio::time::sleep(Duration::from_millis(2100)).await;
+        assert_eq!(call().await, unavailable);
+        assert_eq!(connects.load(Ordering::SeqCst), 2);
+        shutdown.cancel();
+    }
 }
