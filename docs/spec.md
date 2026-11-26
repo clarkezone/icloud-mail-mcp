@@ -36,8 +36,9 @@ The assistant must enroll using an identity that is restricted from its first co
 
 1. A supported tagged enrollment flow creates nodes with only the dedicated bot tag, whose grants permit the one target IP and TCP service port.
 2. A dedicated account has no broad grants or privileges and only the intended service access. If tags are applied later, its untagged state must have either zero access or only that same narrow access.
+3. The integration sets a provider-controlled device attribute on its nodes from creation (for Grok Bot, `custom:grokbot`). A default source-posture condition excludes nodes carrying it from every existing rule, including SSH, and one posture-scoped grant permits only the target IP and TCP service port. Tests assert both the attribute's presence and its absence. Nodes are not tagged.
 
-Personal-account enrollment followed by manual tagging is not an acceptable production profile when that account has broader grants. Whether Grokbot's integration supports a tagged join flow remains an integration question; do not claim it does without testing. If neither profile is possible, the deployment does not pass the isolation gate until its enrollment/policy arrangement changes. Application authentication is not silently introduced as a substitute.
+Personal-account enrollment followed by manual tagging is not an acceptable production profile when that account has broader grants. Grokbot's integration has no tagged join flow, and tagging its node disconnects it, so profile 3 is the one used with Grokbot. If neither profile is possible, the deployment does not pass the isolation gate until its enrollment/policy arrangement changes. Application authentication is not silently introduced as a substitute.
 
 Before using real mail, validate the effective policy for the initial and replacement identities. Test reconnection and actual node replacement/re-authentication; ordinary connection resumption alone is insufficient. Check for extra tags and additive grants. Keep a user-owned workstation user-owned if existing administration access depends on that identity; an IP-specific destination does not require tagging the workstation.
 
